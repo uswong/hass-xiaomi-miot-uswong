@@ -87,7 +87,7 @@ class FanEntity(XEntity, BaseEntity):
                 self._conv_mode = conv
                 self._attr_preset_modes = prop.list_descriptions()
                 self._attr_supported_features |= FanEntityFeature.PRESET_MODE
-            elif prop.in_list(['fan_level', 'speed_level', 'stepless_fan_level', speed_property, percentage_property]):
+            elif prop.in_list(['stepless_fan_level', 'fan_level', 'speed_level', speed_property, percentage_property]):
                 if prop.value_range:
                     self.set_percentage_property(prop)
                 elif prop.value_list and not self._conv_speed:
