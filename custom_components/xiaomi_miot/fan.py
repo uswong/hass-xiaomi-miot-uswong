@@ -1,4 +1,8 @@
 """Support for Xiaomi fans."""
+
+# This is fan.py of hass xiaomi_miot plugin
+# this versioin of fan.py was modified by UNG to make zhimi.fan.sa1 able to change the fan speed
+
 import logging
 
 from homeassistant.components.fan import (
@@ -87,7 +91,7 @@ class FanEntity(XEntity, BaseEntity):
                 self._conv_mode = conv
                 self._attr_preset_modes = prop.list_descriptions()
                 self._attr_supported_features |= FanEntityFeature.PRESET_MODE
-            elif prop.in_list(['stepless_fan_level', 'fan_level', 'speed_level', speed_property, percentage_property]):
+            elif prop.in_list(['fan_level', 'speed_level', 'stepless_fan_level', speed_property, percentage_property]):
                 if prop.value_range:
                     self.set_percentage_property(prop)
                 elif prop.value_list and not self._conv_speed:
@@ -98,6 +102,13 @@ class FanEntity(XEntity, BaseEntity):
             elif prop.in_list(['horizontal_swing', 'vertical_swing']) and not self._conv_oscillate:
                 self._conv_oscillate = conv
                 self._attr_supported_features |= FanEntityFeature.OSCILLATE
+
+        # UNG: Force correct speed property for zhimi.fan.sa1
+        if self.model == "zhimi.fan.sa1":
+            if self._conv_speed and self._conv_speed.full_name == 'fan-2.stepless_fan_level':
+                real = self.device.find_converter('fan.fan_level')
+                if real:
+                    self._conv_speed = real
 
         # issues/617
         if self.custom_config_bool('disable_preset_modes'):
@@ -132,14 +143,27 @@ class FanEntity(XEntity, BaseEntity):
     def set_state(self, data: dict):
         if self._conv_speed:
             val = self._conv_speed.value_from_dict(data)
+
             if val is not None:
-                des = self._conv_speed.prop.list_description(val)
-                if self._speed_range:
-                    self._attr_percentage = ranged_value_to_percentage(self._speed_range, float(val))
-                if self._speed_list and val in self._speed_list:
-                    self._attr_percentage = ordered_list_item_to_percentage(self._speed_list, val)
-                elif self._speed_list and des in self._speed_list:
-                    self._attr_percentage = ordered_list_item_to_percentage(self._speed_list, des)
+                # UNG: Map fan_level back to percentage only for zhimi.fan.sa1
+                if self.model == "zhimi.fan.sa1":
+                    if val == "Level1":
+                        self._attr_percentage = 25
+                    elif val == "Level2":
+                        self._attr_percentage = 50
+                    elif val == "Level3":
+                        self._attr_percentage = 75
+                    elif val == "Level4":
+                        self._attr_percentage = 100
+                else:
+                    des = self._conv_speed.prop.list_description(val)
+                    if self._speed_range:
+                        self._attr_percentage = ranged_value_to_percentage(self._speed_range, float(val))
+                    if self._speed_list and val in self._speed_list:
+                        self._attr_percentage = ordered_list_item_to_percentage(self._speed_list, val)
+                    elif self._speed_list and des in self._speed_list:
+                        self._attr_percentage = ordered_list_item_to_percentage(self._speed_list, des)
+
         if self._conv_power:
             val = self._conv_power.value_from_dict(data)
             if val is not None:
@@ -165,12 +189,6 @@ class FanEntity(XEntity, BaseEntity):
         dat = {}
         if self._conv_power and not self.is_on:
             dat[self._conv_power.full_name] = True
-        if percentage is not None:
-            if self._speed_range:
-                dat[self._conv_speed.full_name] = percentage_to_ranged_value(self._speed_range, percentage)
-            elif self._speed_list:
-                des = percentage_to_ordered_list_item(self._speed_list, percentage)
-                dat[self._conv_speed.full_name] = des
         if preset_mode is not None:
             dat[self._conv_mode.full_name] = preset_mode
         if dat:
@@ -183,9 +201,32 @@ class FanEntity(XEntity, BaseEntity):
 
     async def async_set_percentage(self, percentage: int):
         if percentage == 0 and self._conv_power:
+            _LOGGER.error("UNG DEBUG: async_set_percentage(0) → turning OFF")
             await self.async_turn_off()
             return
-        await self.async_turn_on(percentage=percentage)
+
+        # UNG: Map percentage (1–100) to discrete fan levels (1–4) for zhimi.fan.sa1
+        if self.model == "zhimi.fan.sa1":
+            pct = int(percentage)
+
+            if pct <= 25:
+                level = "Level1"
+            elif pct <= 50:
+                level = "Level2"
+            elif pct <= 75:
+                level = "Level3"
+            else:
+                level = "Level4"
+
+            # UNG: If fan is OFF, turn it ON and set the speed
+            dat = {}
+            if self._conv_power and not self.is_on:
+                dat[self._conv_power.full_name] = True
+
+            dat[self._conv_speed.full_name] = level
+            await self.device.async_write(dat)
+        else:
+            await self.async_turn_on(percentage=percentage)
 
     async def async_set_preset_mode(self, preset_mode: str):
         if not self._conv_mode:
